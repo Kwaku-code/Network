@@ -1,0 +1,251 @@
+---
+title: "Network-Exam"
+author: "Kwaku"
+date: "March 13, 2024"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+Question 1:
+
+1.1 Networks can be found from different sources from the internet, communication networks, social networksl ike twitter and facebook. Network analysis can be applied in different fields of study from Medicine, Biology, Social Sciences, Marketing, Fraud Detectection (Finance), and for Security and Defense. Networks can be characterised as graphs. An example is a social network like twitter where interactions between users and their followers can be constructed and depicted as a graph network. Another characterisation of a network is an adjacency matrix where entries of the columns an rows depict a connection or otherwise between them. The columns and row represent nodes where as their entries correspond to an existence of a connection or otherwise between the nodes. Another type of network can be found in transactional data such as emails of a company. Such a data can be depicted in a way that shows trends and common patterns and provide graphical representation of a network. Another type of network can be constructed from sources of different sources like form one or several documents or from different locations. Also from different types like from text, phone calls, text messages and tweets.
+
+1.2 The Stochastic Block Model (SBM) is for providing the clusters of the network. Its aim is to recover the clusters or communities and the stars at the same time.The stars are the people in a community that connect less within the group than outside the group. The output of the SBM can also be seen as the summary or meta-network of the network. It provides the communities within the network as well as their probability to connect within and outside their communities. The re-organised adjacency matrix from SBM blocks represents the communities and indicates which groups are stars. It thus provides an easy way to recover and detect communities and stars. By just observing this output of the model, one can easily identify who are the stars and also the communities at a glance.
+
+```{r}
+
+```
+
+Question 2
+
+```{r}
+library(dplyr)
+library(igraph)
+library(sna)
+library(ggraph)
+library(greed)
+library(tidygraph)
+```
+
+
+```{r}
+emails <- read.csv("C:/Users/DELL/OneDrive/Desktop/ClintonEmails/ClintonEmails/Emails.csv")
+email_receivers <- read.csv("C:/Users/DELL/OneDrive/Desktop/ClintonEmails/ClintonEmails/EmailReceivers.csv")
+persons <- read.csv("C:/Users/DELL/OneDrive/Desktop/ClintonEmails/ClintonEmails/Persons.csv")
+aliases <- read.csv("C:/Users/DELL/OneDrive/Desktop/ClintonEmails/ClintonEmails/Aliases.csv")
+```
+
+
+```{r}
+# Merge datasets
+data <- merge(emails, email_receivers, by = "Id")
+data <- merge(data, persons, by = "Id")
+data <- merge(data, aliases, by = "PersonId")
+```
+
+We plot our network by creating a network object and visualizing using the sna package
+```{r}
+# Create an edge list dataframe using sender and receiver information
+edg_lst <- data.frame(from = data$Name, to = data$Alias)
+
+# Remove loops from the edge list dataframe
+edg_lst <- edg_lst[edg_lst$from != edg_lst$to, ]
+
+# Filter out missing
+edg_list <- na.omit(edg_lst)
+
+# Remove duplicate rows
+edg_lst <- unique(edg_lst)
+
+network <- network(edg_lst, directed = TRUE, loops = FALSE)
+
+plot(network)
+```
+
+```{r}
+#Convert network graph into an adjacency matrix
+A <- as.matrix(network)
+```
+
+
+#The Latent Space Model 
+
+We define a loss function and create an LSM function
+```{r}
+LSM.loss <- function(par,A){
+  alpha = par[1]
+  Z = matrix(par[-1],ncol=2)
+  D.out = as.matrix(dist(Z))
+  log.lik =  sum(A * (alpha - D.out) - log(1+exp(alpha - D.out)))
+  return(-log.lik)
+}
+
+lsm_func <- function(A){
+  n = nrow(A)
+  alpha.init = 0
+  z.init = runif(2*n,-1,1)
+  par.init = c(alpha.init,z.init) 
+  out = optim(par.init,LSM.loss,A=A,method="SANN")
+  list(alpha = out$par[1],
+      Z.final = matrix(out$par[-1],ncol = 2),
+      loss = out$value,
+      Z.init = matrix(z.init,ncol=2))
+}
+```
+
+
+We fit our LSM function to retrieve our latent space solution for our network using our adjacency matrix that contains information about our nodes and their connections in the latent space
+```{r}
+res = lsm_func(A)
+```
+
+We plot our latent space solution
+```{r}
+gplot(A,coord=res$Z.final,edge.col="gray")
+title(main=paste("LSM solution (loss=",round(res$loss,3),")",sep=''))
+```
+
+## SBM
+
+We use the SBM algorithm in the greed package to recover both the clusters and the model parameters.
+```{r}
+sbm_out <- greed(A,model = Sbm())
+```
+The model chose 12 clusters with an ICL of -4465.
+
+We can get the estimated parameters through the coef() function for the model. pi provide the probability a node to belong to a cluster theta represents the probality of interaction between the blocks or clusters 
+```{r}
+params = coef(sbm_out)
+params$pi
+```
+
+```{r}
+round(params$theta,3)
+```
+
+We can look at the reorganized adjacency matrix below that provides both information on clusters and stars. It obvious that out of the 12 clusters chosen by the model, 4  clusters seem to be densely connected showing a lot of exchanges of emails within these four clusters and we have a group that is sparsely connected both within and without and shows little communication within these densely populated communities. 
+```{r}
+plot(sbm_out,type='blocks')
+```
+
+
+```{r}
+graph <- igraph::graph_from_adjacency_matrix(A) %>% as_tbl_graph() %>% 
+    mutate(Popularity = centrality_degree())  %>% 
+    activate(nodes) %>%
+    mutate(cluster=factor(clustering(sbm_out),1:K(sbm_out)))
+
+# plot using ggraph
+ggraph(graph, layout = 'kk') + 
+    geom_edge_link() + 
+    geom_node_point(aes(size = Popularity,color=cluster))
+```
+It is obvious from our plot of the clusters that 4 communities are densely populated and show a lot of exchanges within those communities. Then there are groups within these pcommunities that do not exchange much with these communities for instance clusters 11 and 1
+
+```{r}
+
+```
+
+
+We can analyse the data for email exchanges that have the word 'LIBYA' or 'Libya' in it
+```{r}
+
+flt_data <- data[grep("LIBYA|Libya", data$MetadataSubject), ]
+
+edg_lst <- data.frame(from = flt_data$Name, to = flt_data$Alias)
+
+edg_lst <- unique(edg_lst)
+
+network <- network(edg_lst, directed = TRUE, loops = FALSE)
+
+plot(network)
+
+```
+
+## LSM
+Define a loss function and an LSM function
+```{r}
+LSM.loss <- function(par,A){
+  alpha = par[1]
+  Z = matrix(par[-1],ncol=2)
+  D.out = as.matrix(dist(Z))
+  log.lik =  sum(A * (alpha - D.out) - log(1+exp(alpha - D.out)))
+  return(-log.lik)
+}
+
+lsm_func2 <- function(A){
+  n = nrow(A)
+  alpha.init = 0
+  z.init = runif(2*n,-1,1)
+  par.init = c(alpha.init,z.init) 
+  out = optim(par.init,LSM.loss,A=A,method="SANN")
+  list(alpha = out$par[1],
+      Z.final = matrix(out$par[-1],ncol = 2),
+      loss = out$value,
+      Z.init = matrix(z.init,ncol=2))
+}
+```
+
+```{r}
+A <- as.matrix(network)
+```
+
+We run and plot the latent space solution
+```{r}
+res = lsm_func2(A)
+
+gplot(A,coord=res$Z.final,edge.col="gray")
+title(main=paste("LSM solution (loss=",round(res$loss,3),")",sep=''))
+```
+
+# SBM
+We can recoover the clusters using SBM
+```{r}
+sbm1_out <- greed(A,model = Sbm())
+```
+We get the estimated parameters
+```{r}
+prms = coef(sbm1_out)
+prms$pi
+```
+
+```{r}
+round(prms$theta,3)
+```
+
+From our blocks below we see a community of 3 clusters that exchange a lot of emails with the word 'LIBYA' or 'Libya' contained in their exchanges. There is a community within this cluster that doesn't communicate much within these communities.
+```{r}
+plot(sbm1_out,type='blocks')
+```
+
+
+```{r}
+graph <- igraph::graph_from_adjacency_matrix(A) %>% as_tbl_graph() %>% 
+    mutate(Popularity = centrality_degree())  %>% 
+    activate(nodes) %>%
+    mutate(cluster=factor(clustering(sbm1_out),1:K(sbm1_out)))
+
+# plot using ggraph
+ggraph(graph, layout = 'kk') + 
+    geom_edge_link() + 
+    geom_node_point(aes(size = Popularity,color=cluster))
+```
+Our plot of the clusters show densely populated interaction within three communities who exchange a lot of emails with the word 'LIBYA' or 'Libya' contained in the message. There is another community within these group that doesn't communicate much on this topic. For instance community 1 in the densely populated community 2
+```{r}
+
+```
+
+# Conclusion
+
+This project provides a description of the types of networks that can be encounted and provide examples and the context in which each network might be used. The project also provides an explanation of the Stoochastic Block Model (SBM) and how it different it is from other models like LSM and LPCM. The project implements a the LSM and SBM algorithm using the ClintonEmails data. In implementing the SBM for instance, we find 4 clusters densely populated showing a lot of email exchanges within these communities. Also we find a group within these communities who do not exchange a lot of messages within this commuities. We also try to recover the clusters that exchanged a lot of emails with the words 'LIBYA' or 'Libya' within the exchanges and we find three communities exchange a lot of messages with the word 'LIBYA' or 'Libya' in the message whereas we also find a group within this community who do exchange information on this topic.
+
+
+```{r}
+
+```
+
